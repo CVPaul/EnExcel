@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*- 
 
 import wx
+import os
 import wx.xrc
 import wx.dataview
 import pandas as pd
@@ -150,6 +151,7 @@ class EnExcel (wx.Frame):
         else:
             path = self.get_tree_select_path(item[-1])
         path = "./"+"/".join(path)
+        os.system("open %s"%(path+"/detail.pdf"))
         with open(path+"/describe.txt") as fp:
             self.m_textDetail.SetLabelText(fp.read())
         img = Canvas(path+"/example.png")
@@ -226,12 +228,11 @@ class EnExcel (wx.Frame):
                 root3[token]=self.m_tree.AppendItem(root2[row[0]],token)
         for row in self.data.index:
             token = row[2]
-            # import os
-            # pos = -3
-            # filename = "/".join(row[:pos])+"describe.txt"
+            # pos = 0
+            # filename = "./"+"/".join(row[:pos])+"/detail.pdf"
             # content = "当前节点:%s"%"->".join(row[:pos])
             # content += "\n产品介绍:blabalbal...\n"
-            # os.system('echo "%s" > %s'%(content,filename))
+            # os.system('cp 需求.pdf %s'%(filename))
             if token not in root4:
                 root4[token]=self.m_tree.AppendItem(root3[row[1]],token)
         self.m_tree.ExpandAll()
