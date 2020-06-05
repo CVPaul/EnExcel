@@ -7,6 +7,7 @@ import wx.dataview
 import pandas as pd
 
 from PIL import Image
+from grid import DataDialog
 
 TITLE = "EnExcel"
 ROOT_NAME = "商品总览"
@@ -14,12 +15,30 @@ DATA_PATH = "样例数据.xlsx"
 
 BOND = 0
 CACHE_SIZE = 5
+WIN_WIDTH = 840
+WIN_HEIGH = 600
+WIN_DLG_WIDTH = 300
+WIN_DLG_HEIGHT = 400
 IMG_WIN_WIDTH = 640
 IMG_WIN_HEIGHT = 480
 HEIGHT_SCALE_FAC = 0.04
-WIN_DEFAULT_WIDTH = 840
-WIN_DEFAULT_HEIGHT = 600
+THE_INDEX_COLS = ["分支","一级分支","二级分支"]
+THE_SLC_DVC = ["编号","名称","材质","做工方式","销售亮点1","销售亮点2"]
 
+# IDS
+ID_RELOAD = 10086
+ID_INSERT = 10087
+ID_DATA_DLG_OK = 10089
+ID_DATA_DLG_CANCLE = 10090
+
+# open pdf
+# XOPEN = "open" # mac
+XOPEN = "D:/Program Files (x86)/WPS Office/ksolaunch.exe" # windows 
+class ItemEvent():
+    def __init__(self,item):
+        self.item = item
+    def GetItem(self):
+        return self.item
 class Canvas(wx.Frame):
     def __init__(self,filename):
         wx.Frame.__init__(self, None, -1, filename, size=(IMG_WIN_WIDTH, IMG_WIN_HEIGHT))
@@ -47,18 +66,21 @@ class Canvas(wx.Frame):
             pass
 
 class EnExcel (wx.Frame):
-    def __init__(self, parent, data):
+    def __init__(self, parent):
         wx.Frame.__init__ (self, parent, id = wx.ID_ANY, title = TITLE,
             pos = wx.DefaultPosition, 
-            size = wx.Size(WIN_DEFAULT_WIDTH,WIN_DEFAULT_HEIGHT),
-            style = wx.DEFAULT_FRAME_STYLE|wx.TAB_TRAVERSAL)
-        self.data = data
+            size = wx.Size(WIN_WIDTH,WIN_HEIGH),
+            style = wx.DEFAULT_FRAME_STYLE|wx.TAB_TRAVERSAL&~wx.MAXIMIZE)
+        
         self.key_code = 0
-
+        self.m_status = None
         self.SetSizeHints(wx.DefaultSize, wx.DefaultSize)
+        self.data_load()
         
         bSizer5 = wx.BoxSizer(wx.HORIZONTAL)
         
+        self.Bind(wx.EVT_SIZE,self.on_size)
+
         self.m_splitwin1 = wx.SplitterWindow(self, wx.ID_ANY, wx.DefaultPosition, wx.DefaultSize, wx.SP_3D)
         self.m_splitwin1.Bind(wx.EVT_IDLE, self.m_splitwin1OnIdle)
         
@@ -84,8 +106,10 @@ class EnExcel (wx.Frame):
         bSizer8 = wx.BoxSizer(wx.VERTICAL)
 
         self.m_dataVLC = wx.dataview.DataViewListCtrl(self.m_panel6, wx.ID_ANY, wx.DefaultPosition, wx.DefaultSize, 0)
-        for token in self.data.columns:
+        for token in THE_SLC_DVC:
             self.m_dataVLC.AppendTextColumn(token)
+        self.m_dataVLC.Bind(wx.dataview.EVT_DATAVIEW_ITEM_ACTIVATED, self.on_detail_pdf)
+        self.m_dataVLC.Bind(wx.dataview.EVT_DATAVIEW_SELECTION_CHANGED, self.on_data_select)
         bSizer8.Add(self.m_dataVLC, 0, wx.ALL, BOND)
 
         self.m_comboBox = wx.ComboBox(self.m_panel6, wx.ID_ANY, wx.EmptyString, wx.DefaultPosition, wx.DefaultSize, [], wx.TE_PROCESS_ENTER)
@@ -128,21 +152,81 @@ class EnExcel (wx.Frame):
         self.m_status.SetFieldsCount(2)
         self.m_status.SetStatusText("名称：",0)
         self.m_status.SetStatusText("数量：",1)
-        self.m_menubar5 = wx.MenuBar(0)
-        self.m_menu4 = wx.Menu()
-        self.m_menubar5.Append(self.m_menu4, u"添加")
-        
-        self.SetMenuBar(self.m_menubar5)
+
+        self.m_menubar = wx.MenuBar(0)
+        self.m_menuFile = wx.Menu()
+        self.m_menuItemInsert = wx.MenuItem(self.m_menuFile,ID_INSERT,text=U"插入")
+        self.m_menuFile.Append(self.m_menuItemInsert)
+        self.m_menuItemLoad = wx.MenuItem(self.m_menuFile,ID_RELOAD,text=u"重载")
+        self.m_menuFile.Append(self.m_menuItemLoad)
+        self.m_menubar.Append(self.m_menuFile, u"文件")
+        self.SetMenuBar(self.m_menubar)
+        # event
+        self.Bind(wx.EVT_MENU,self.on_menu_handler)
         self.Centre(wx.BOTH)
     
     def __del__(self):
         pass
-    
+
+    def on_size(self,event):
+        pass
+        # event.skip()
+
+    def on_menu_handler(self,event):
+        id = event.GetId()
+        if id == ID_RELOAD:
+            self.data_load()
+            self.m_status.SetStatusText("载入数据完成!",0)
+            self.m_status.SetStatusText("数量：共%s条记录"%self.data.shape[0],1)
+        elif id == ID_INSERT:
+            item = self.m_tree.GetSelections()
+            path = []
+            if len(item) > 0:
+                path = self.get_tree_select_path(item[-1])[1:]
+            if(len(path) < len(THE_INDEX_COLS)):
+                wx.MessageBox('请选择插入的第%d级节点'%len(THE_INDEX_COLS), 'Info', 
+                    wx.OK|wx.ICON_INFORMATION)
+            else:
+                dlg = DataDialog(self,self.data.columns)
+                if dlg.ShowModal() == wx.ID_OK:
+                    dat = dlg.GetData()
+                    for i in range(len(THE_INDEX_COLS)):
+                        dat[THE_INDEX_COLS[i]] = path[i]
+                    self.data = self.data.append(
+                        pd.Series(dat).to_frame().T.reset_index().drop("index",axis=1).set_index(THE_INDEX_COLS))
+                    dat = self.data
+                    for token in path:
+                        dat = dat.loc[token]
+                    if isinstance(dat,pd.Series):
+                        dat = dat.to_frame().T
+                    self.tree_slc_all = False
+                    self.tree_slc_data = dat
+                    self.render_data(self.tree_slc_data)
+                    self.m_status.SetStatusText("名称："+"+".join(path),0)
+                    self.m_status.SetStatusText("数量：%d"%self.tree_slc_data.shape[0],1)
+                    self.data.to_excel(DATA_PATH)
+
+    def data_load(self):
+        self.data = pd.read_excel(DATA_PATH).set_index(THE_INDEX_COLS).fillna("")
+        self.tree_slc_all = True
+        self.tree_slc_data = self.data
+
     def on_key_down(self,event):
         self.key_code = event.GetKeyCode()
     
     def on_key_up(self,event):
         self.key_code = 0
+
+    def on_data_select(self,event):
+        pos = self.m_dataVLC.GetSelectedRow()
+        dat = self.tree_slc_data.iloc[pos].to_dict()
+        content = "\n".join(["%s:%s"%(x,dat[x]) for x in dat])
+        self.m_textDetail.SetLabelText(content)
+
+    def on_detail_pdf(self, event):
+        pos = self.m_dataVLC.GetSelectedRow()
+        pdf = self.tree_slc_data.iloc[pos]["详细信息"]
+        os.system('"%s" %s'%(XOPEN,pdf))
 
     def on_detail(self,event):
         item = self.m_tree.GetSelections()
@@ -150,9 +234,8 @@ class EnExcel (wx.Frame):
             path = []
         else:
             path = self.get_tree_select_path(item[-1])
-        path = "./"+"/".join(path)
-        os.system("open %s"%(path+"/detail.pdf"))
-        with open(path+"/describe.txt") as fp:
+        path = "./" + "/".join(path[1:] if len(path) else [])
+        with open(path+"/describe.txt","rb") as fp:
             self.m_textDetail.SetLabelText(fp.read())
         img = Canvas(path+"/example.png")
         img.start()
@@ -165,10 +248,10 @@ class EnExcel (wx.Frame):
             return select_path
         while True:
             name = self.m_tree.GetItemText(item)
+            select_path.append(name)
             if name == ROOT_NAME:
                 break
             else:
-                select_path.append(name)
                 item = self.m_tree.GetItemParent(item)
         return select_path[::-1]
 
@@ -202,19 +285,27 @@ class EnExcel (wx.Frame):
             selections += self.m_tree.GetSelections()
         # print("len:",selections,len(self.m_tree.GetSelections()))
         select_info = set()
+        self.tree_slc_all = False
+        self.tree_slc_all = pd.DataFrame()
         for item in selections:
             select_info.add(self.m_tree.GetItemText(item))
             select_path = self.get_tree_select_path(item)
+            if len(select_path) < 1:
+                continue
+            if len(select_path) == 0 and select_path[0] == ROOT_NAME:
+                self.tree_slc_all = True
+                self.tree_slc_data = self.data
+                break
             dat = self.data
-            for token in select_path:
+            for token in select_path[1:]:
                 dat = dat.loc[token]
             if isinstance(dat,pd.Series):
                 dat = dat.to_frame().T
             dat_collect.append(dat)
-        dat = pd.concat(dat_collect).drop_duplicates().sort_values("编号")
-        self.render_data(dat)
+        self.tree_slc_data = pd.concat(dat_collect).drop_duplicates().sort_values("编号")
+        self.render_data(self.tree_slc_data)
         self.m_status.SetStatusText("名称："+"+".join(select_info),0)
-        self.m_status.SetStatusText("数量：%d"%dat.shape[0],1)
+        self.m_status.SetStatusText("数量：%d"%self.tree_slc_data.shape[0],1)
 
     def render_tree(self):
         self.m_tree.DeleteAllItems()
@@ -241,41 +332,41 @@ class EnExcel (wx.Frame):
         self.m_dataVLC.DeleteAllItems()
         # for token in dat.columns:
         #     self.m_dataVLC.AppendTextColumn(token)
+        dat = dat[THE_SLC_DVC]
         for row in dat.values:
             self.m_dataVLC.AppendItem(row)
         
     def m_splitwin1OnIdle(self, event):
-        # self.SetSize((WIN_DEFAULT_WIDTH,WIN_DEFAULT_HEIGHT))
+        # self.SetSize((WIN_WIDTH,WIN_HEIGH))
         # self.m_splitwin1.SetSashPosition(0)
-        self.m_splitwin1.SetSize((WIN_DEFAULT_WIDTH*0.2,WIN_DEFAULT_HEIGHT))
+        self.m_splitwin1.SetSize((WIN_WIDTH*0.2,WIN_HEIGH))
         self.m_tree.SetSize(self.m_splitwin1.GetSize())
         self.render_tree()
         self.m_splitwin1.Unbind(wx.EVT_IDLE)
     
     def m_splitwin2OnIdle(self, event):
-        self.m_splitwin2.SetPosition((WIN_DEFAULT_WIDTH*0.2,0))
-        self.m_splitwin2.SetSize((WIN_DEFAULT_WIDTH*0.6,WIN_DEFAULT_HEIGHT))
+        self.m_splitwin2.SetPosition((WIN_WIDTH*0.2,0))
+        self.m_splitwin2.SetSize((WIN_WIDTH*0.6,WIN_HEIGH))
         self.m_comboBox.SetPosition((0,0))
-        self.m_comboBox.SetSize((0.545*WIN_DEFAULT_WIDTH,HEIGHT_SCALE_FAC*WIN_DEFAULT_HEIGHT))
-        self.m_btnSearch.SetPosition((0.545*WIN_DEFAULT_WIDTH,0))
-        self.m_btnSearch.SetSize((0.05*WIN_DEFAULT_WIDTH,HEIGHT_SCALE_FAC*WIN_DEFAULT_HEIGHT))
-        self.m_dataVLC.SetPosition((0,HEIGHT_SCALE_FAC*WIN_DEFAULT_HEIGHT))
-        self.m_dataVLC.SetSize(self.m_splitwin2.GetSize())
+        self.m_comboBox.SetSize((0.545*WIN_WIDTH,HEIGHT_SCALE_FAC*WIN_HEIGH))
+        self.m_btnSearch.SetPosition((0.545*WIN_WIDTH,0))
+        self.m_btnSearch.SetSize((0.05*WIN_WIDTH,HEIGHT_SCALE_FAC*WIN_HEIGH))
+        self.m_dataVLC.SetPosition((0,HEIGHT_SCALE_FAC*WIN_HEIGH))
+        self.m_dataVLC.SetSize((0.6*WIN_WIDTH,WIN_HEIGH*0.825))
         self.render_data(self.data.head(20))
         self.m_splitwin2.Unbind(wx.EVT_IDLE)
     
     def m_splitwin3OnIdle(self, event):
-        self.m_splitwin3.SetPosition((WIN_DEFAULT_WIDTH*0.8,0))
-        self.m_splitwin3.SetSize((WIN_DEFAULT_WIDTH*0.2,WIN_DEFAULT_HEIGHT))
-        self.m_btnDetail.SetSize((0.2*WIN_DEFAULT_WIDTH,HEIGHT_SCALE_FAC*WIN_DEFAULT_HEIGHT))
-        self.m_textDetail.SetPosition((0,HEIGHT_SCALE_FAC*WIN_DEFAULT_HEIGHT))
+        self.m_splitwin3.SetPosition((WIN_WIDTH*0.8,0))
+        self.m_splitwin3.SetSize((WIN_WIDTH*0.2,WIN_HEIGH))
+        self.m_btnDetail.SetSize((0.2*WIN_WIDTH,HEIGHT_SCALE_FAC*WIN_HEIGH))
+        self.m_textDetail.SetPosition((0,HEIGHT_SCALE_FAC*WIN_HEIGH))
         self.m_textDetail.SetSize(self.m_splitwin3.GetSize())
         self.m_splitwin3.Unbind(wx.EVT_IDLE)
 
 if __name__ == "__main__":
-    data = pd.read_excel(DATA_PATH).set_index(
-        ["分支","一级分支","二级分支"]).fillna("")
     app = wx.App()
-    window = EnExcel(None,data)
+    window = EnExcel(None)
+    # window = DataDialog(None)
     window.Show(True) 
     app.MainLoop()
